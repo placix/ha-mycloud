@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
@@ -9,6 +11,25 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
 
 from .const import DOMAIN
+
+
+def stable_raid_token(volume: dict, index: int) -> str:
+    """Return a stable, registry-safe token for one RAID volume."""
+    raw_token = volume.get("id")
+    if raw_token in (None, ""):
+        raw_token = volume.get("number")
+    if raw_token in (None, ""):
+        raw_token = index
+    return re.sub(r"[^a-zA-Z0-9_-]+", "_", str(raw_token)).strip("_") or str(index)
+
+
+def find_system_volume(data: dict, reference: object) -> dict | None:
+    """Match an OS 5 volume reference to the established system volume."""
+    value = str(reference)
+    for volume in data.get("system_info", {}).get("volumes", []):
+        if value in {str(volume.get("id")), str(volume.get("name"))}:
+            return volume
+    return None
 
 
 def main_device_info(data: dict) -> DeviceInfo:

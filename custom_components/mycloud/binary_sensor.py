@@ -4,21 +4,63 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.components.binary_sensor import BinarySensorEntity
+from homeassistant.components.binary_sensor import (
+    BinarySensorDeviceClass,
+    BinarySensorEntity,
+    BinarySensorEntityDescription,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .const import VERSION
 from .coordinator import MyCloudDataUpdateCoordinator
 from .entity import (
     disk_device_info,
+    find_system_volume,
+    main_device_info,
     owned_entity_id,
     resolve_volume_unique_id,
+    stable_raid_token,
     volume_device_info,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+OVER_TEMPERATURE_DESCRIPTION = BinarySensorEntityDescription(
+    key="over_temperature",
+    name="Over Temperature",
+    icon="mdi:thermometer-alert",
+    device_class=BinarySensorDeviceClass.PROBLEM,
+    entity_category=EntityCategory.DIAGNOSTIC,
+)
+INTERNET_ACCESS_DESCRIPTION = BinarySensorEntityDescription(
+    key="internet_access",
+    name="Internet Access",
+    icon="mdi:web-check",
+    device_class=BinarySensorDeviceClass.CONNECTIVITY,
+    entity_category=EntityCategory.DIAGNOSTIC,
+)
+RAID_PROBLEM_DESCRIPTION = BinarySensorEntityDescription(
+    key="problem",
+    name="RAID Problem",
+    icon="mdi:harddisk-alert",
+    device_class=BinarySensorDeviceClass.PROBLEM,
+    entity_category=EntityCategory.DIAGNOSTIC,
+)
+
+RAID_OK_STATES = {
+    "clean",
+    "resync",
+    "resync5",
+    "recovery",
+    "migrate",
+    "reshape",
+    "expansion",
+}
+RAID_PROBLEM_STATES = {"degraded", "damaged"}
 
 
 async def async_setup_entry(
@@ -129,7 +171,130 @@ def _build_binary_entities(
                     )
                 )
 
+    if not legacy_only and config_entry.data[VERSION] == 5:
+        main_device = main_device_info(data)
+        entities.extend(
+            (
+                MyCloudOS5BinarySensor(
+                    coordinator,
+                    main_device,
+                    serial_number,
+                    device_name,
+                    OVER_TEMPERATURE_DESCRIPTION,
+                ),
+                MyCloudOS5BinarySensor(
+                    coordinator,
+                    main_device,
+                    serial_number,
+                    device_name,
+                    INTERNET_ACCESS_DESCRIPTION,
+                ),
+            )
+        )
+        diagnostics = data.get("diagnostics") or {}
+        for index, raid_volume in enumerate(
+            diagnostics.get("raid", {}).get("volumes", [])
+        ):
+            token = stable_raid_token(raid_volume, index)
+            system_volume = find_system_volume(
+                data, raid_volume.get("volume") or raid_volume.get("id")
+            )
+            raid_device = (
+                volume_device_info(hass, config_entry, data, system_volume)
+                if system_volume is not None
+                else main_device
+            )
+            entities.append(
+                MyCloudRAIDProblemSensor(
+                    coordinator,
+                    raid_device,
+                    serial_number,
+                    device_name,
+                    token,
+                )
+            )
+
     return entities
+
+
+class MyCloudOS5BinarySensor(
+    CoordinatorEntity[MyCloudDataUpdateCoordinator], BinarySensorEntity
+):
+    """Expose one tri-state OS 5 system condition."""
+
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator, device_info, serial, device_name, description):
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._attr_device_info = device_info
+        self._attr_unique_id = f"{serial}_{description.key}"
+        self._attr_name = description.name
+
+    @property
+    def available(self) -> bool:
+        endpoint = (
+            "system_warning"
+            if self.entity_description.key == "over_temperature"
+            else "internet_access"
+        )
+        return super().available and self.coordinator.data.get(
+            "optional_available", {}
+        ).get(endpoint, False)
+
+    @property
+    def is_on(self):
+        if self.entity_description.key == "internet_access":
+            value = self.coordinator.data.get("internet_access")
+            return value if isinstance(value, bool) else None
+
+        warning = self.coordinator.data.get("system_warning") or {}
+        code = warning.get("code")
+        if code == 1:
+            return True
+        if code in (0, 2):
+            return False
+        return None
+
+
+class MyCloudRAIDProblemSensor(
+    CoordinatorEntity[MyCloudDataUpdateCoordinator], BinarySensorEntity
+):
+    """Report only confirmed RAID failures as problems."""
+
+    _attr_has_entity_name = True
+    entity_description = RAID_PROBLEM_DESCRIPTION
+
+    def __init__(self, coordinator, device_info, serial, device_name, token):
+        super().__init__(coordinator)
+        self._attr_device_info = device_info
+        self._token = token
+        self._attr_unique_id = f"{serial}_raid_{token}_problem"
+        self._attr_name = f"RAID {token} Problem"
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.coordinator.data.get(
+            "optional_available", {}
+        ).get("diagnostics", False)
+
+    @property
+    def is_on(self):
+        volumes = (
+            (self.coordinator.data.get("diagnostics") or {})
+            .get("raid", {})
+            .get("volumes", [])
+        )
+        for index, volume in enumerate(volumes):
+            if stable_raid_token(volume, index) != self._token:
+                continue
+            state = str(volume.get("state", "")).lower()
+            if state in RAID_PROBLEM_STATES:
+                return True
+            if state in RAID_OK_STATES:
+                return False
+            return None
+        return None
 
 
 class MyCloudDiskBinarySensor(
@@ -162,8 +327,8 @@ class MyCloudDiskBinarySensor(
         """Return the existing disk boolean value."""
         for disk in self.coordinator.data.get("system_info", {}).get("disks", []):
             if disk.get("name") == self._disk_name:
-                return disk.get(self._field, False)
-        return False
+                return disk.get(self._field)
+        return None
 
 
 class MyCloudDiskHealthySensor(MyCloudDiskBinarySensor):
@@ -264,8 +429,8 @@ class MyCloudVolumeBinarySensor(
         volumes = self.coordinator.data.get("system_info", {}).get("volumes", [])
         for volume in volumes:
             if volume.get("name") == self._volume_name:
-                return volume.get(self._field, False)
-        return False
+                return volume.get(self._field)
+        return None
 
 
 class MyCloudVolumeMountedSensor(MyCloudVolumeBinarySensor):

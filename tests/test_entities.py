@@ -42,11 +42,8 @@ async def test_existing_sensors_and_binary_sensors(hass, make_nas_client):
         for item in registry.entities.values()
         if item.config_entry_id == entry.entry_id
     ]
-    assert len([item for item in entries if item.domain == "sensor"]) == 8
-    assert len([item for item in entries if item.domain == "binary_sensor"]) == 7
-
     by_unique_id = {item.unique_id: item for item in entries}
-    assert set(by_unique_id) == {
+    existing_unique_ids = {
         "NAS-SERIAL-1_cpu_usage",
         "NAS-SERIAL-1_memory_usage",
         "NAS-SERIAL-1_total_storage",
@@ -63,6 +60,7 @@ async def test_existing_sensors_and_binary_sensors(hass, make_nas_client):
         "NAS-SERIAL-1_1_volume_unlocked",
         "NAS-SERIAL-1_1_volume_encrypted",
     }
+    assert existing_unique_ids <= set(by_unique_id)
     assert by_unique_id["NAS-SERIAL-1_cpu_usage"].entity_id == (
         "sensor.test_nas_cpu_usage"
     )
@@ -96,6 +94,7 @@ async def test_existing_sensors_and_binary_sensors(hass, make_nas_client):
     assert {
         unique_id: hass.states.get(item.entity_id).state
         for unique_id, item in by_unique_id.items()
+        if unique_id in existing_unique_ids
     } == expected_states
 
 

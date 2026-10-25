@@ -68,7 +68,14 @@ def nas_data():
         },
         "system_status": {
             "cpu": 12,
-            "memory": {"total": 1024, "unused": 256, "simple": "1 GB"},
+            "memory": {
+                "total": 1024,
+                "unused": 256,
+                "simple": "1 GB",
+                "buffers": 64,
+                "cached": 128,
+            },
+            "process_count": 42,
         },
         "device_info": {
             "serial_number": "NAS-SERIAL-1",
@@ -76,6 +83,42 @@ def nas_data():
             "description": "WD My Cloud Mirror",
         },
         "system_version": {"firmware": "5.33.102"},
+        "diagnostics": {
+            "board_temperature": 0,
+            "fan_rpm": 0,
+            "disk_statuses": ["good"],
+            "raid": {
+                "volume_count": 1,
+                "result": "success",
+                "disk_count": 2,
+                "volumes": [
+                    {
+                        "id": "1",
+                        "number": "1",
+                        "volume": "Volume_1",
+                        "mode": "raid1",
+                        "state": "clean",
+                        "extra": {},
+                    }
+                ],
+                "extra": {},
+            },
+            "extra": {},
+        },
+        "volume_status": [
+            {
+                "volume": "1",
+                "raid_mode": "raid1",
+                "raid_status": "clean",
+                "file_type": "ext4",
+                "free_size": 100,
+                "percentage": 0,
+                "device": "/dev/md1",
+                "raid_uuid": "sensitive-uuid",
+            }
+        ],
+        "system_warning": {"code": 0, "status": "normal"},
+        "internet_access": True,
     }
 
 
@@ -102,6 +145,10 @@ def make_nas_client(nas_data):
         client.system_status = AsyncMock(return_value=values["system_status"])
         client.device_info = AsyncMock(return_value=values["device_info"])
         client.system_version = AsyncMock(return_value=values["system_version"])
+        client.diagnostics = AsyncMock(return_value=values.get("diagnostics"))
+        client.volume_status = AsyncMock(return_value=values.get("volume_status"))
+        client.system_warning = AsyncMock(return_value=values.get("system_warning"))
+        client.internet_access = AsyncMock(return_value=values.get("internet_access"))
         return client
 
     return _make

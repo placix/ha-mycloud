@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
+from time import monotonic
 from typing import Any
 
 import aiohttp
@@ -26,6 +27,13 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+OPTIONAL_API_INTERVALS = {
+    "diagnostics": 600,
+    "system_warning": 600,
+    "internet_access": 600,
+    "volume_status": 3600,
+}
 
 
 def _is_auth_error(error: Exception) -> bool:
@@ -51,6 +59,9 @@ class MyCloudDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             config_entry.data[HOST],
             config_entry.data[VERSION],
         )
+        self._optional_cache: dict[str, Any] = {}
+        self._optional_available = {key: False for key in OPTIONAL_API_INTERVALS}
+        self._optional_last_attempt: dict[str, float] = {}
         update_interval = config_entry.options.get(
             "update_interval", DEFAULT_UPDATE_INTERVAL
         )
@@ -83,15 +94,53 @@ class MyCloudDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 f"Unable to initialize the NAS client: {error}"
             ) from error
 
+    async def _async_fetch_optional(self, key: str, now: float) -> Any:
+        """Fetch one rate-limited OS 5 endpoint without failing the base update."""
+        last_attempt = self._optional_last_attempt.get(key)
+        if (
+            last_attempt is not None
+            and now - last_attempt < OPTIONAL_API_INTERVALS[key]
+        ):
+            return self._optional_cache.get(key)
+
+        self._optional_last_attempt[key] = now
+        try:
+            method = getattr(self.client, key)
+            async with asyncio.timeout(UPDATE_TIMEOUT):
+                value = await method()
+        except Exception as error:
+            if _is_auth_error(error):
+                self._optional_last_attempt.pop(key, None)
+                raise
+            self._optional_available[key] = False
+            _LOGGER.warning(
+                "Optional NAS monitoring endpoint %s is unavailable (%s)",
+                key,
+                type(error).__name__,
+            )
+            return self._optional_cache.get(key)
+
+        self._optional_cache[key] = value
+        self._optional_available[key] = True
+        return value
+
     async def _async_fetch_data(self) -> dict[str, Any]:
-        """Fetch the four existing data sets without adding new API calls."""
+        """Fetch established data and independently collect optional OS 5 data."""
         async with asyncio.timeout(UPDATE_TIMEOUT):
-            return {
+            data = {
                 "system_info": await self.client.system_info(),
                 "system_status": await self.client.system_status(),
                 "device_info": await self.client.device_info(),
                 "system_version": await self.client.system_version(),
             }
+
+        if self.config_entry.data[VERSION] == 5:
+            now = monotonic()
+            for key in OPTIONAL_API_INTERVALS:
+                data[key] = await self._async_fetch_optional(key, now)
+            data["optional_available"] = self._optional_available.copy()
+
+        return data
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data and retry once after an expired authenticated session."""

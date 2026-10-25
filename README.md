@@ -50,7 +50,7 @@ This integration currently supports V2 and V5 firmware. You can see a list of te
 
 **Want to add your device?**
 
-If your model isn't on the list, or if you have a different firmware version, I'd love to add support for it. Please **[open a GitHub Issue](https://github.com/J-shw/ha-mycloud/issues/new?template=new_device_request.md)** and we can work together to get it added.
+If your model isn't on the list, or if you have a different firmware version, I'd love to add support for it. Please **[open a GitHub Issue](https://github.com/placix/ha-mycloud/issues/new?template=new_device_request.md)** and we can work together to get it added.
 
 ---
 
@@ -73,6 +73,10 @@ This integration provides the following entities. `[disk_name]` and `[volume_nam
 * **Disk Size**: `sensor.wd_my_cloud_disk_[disk_name]_size`
 * **Volume Size**: `sensor.wd_my_cloud_volume_[volume_name]_size`
 
+WD OS 5 additionally provides diagnostic sensors for process count, cached and
+buffered memory (reported by the NAS in KiB), system warning, RAID state and
+mode per RAID volume, and file-system type per storage volume.
+
 ### Binary Sensors
 * **Disk Healthy**: `binary_sensor.wd_my_cloud_disk_[disk_name]_healthy`
 * **Disk Sleeping**: `binary_sensor.wd_my_cloud_disk_[disk_name]_sleeping`
@@ -81,6 +85,12 @@ This integration provides the following entities. `[disk_name]` and `[volume_nam
 * **Volume Mounted**: `binary_sensor.wd_my_cloud_volume_[volume_name]_mounted`
 * **Volume Unlocked**: `binary_sensor.wd_my_cloud_volume_[volume_name]_unlocked`
 * **Volume Encrypted**: `binary_sensor.wd_my_cloud_volume_[volume_name]_encrypted`
+
+WD OS 5 additionally provides system-overtemperature (`problem`),
+NAS-reported internet connectivity, and a RAID-problem binary sensor per RAID
+volume. `degraded` and `damaged` are problems. Active maintenance states such as
+`resync`, `resync5`, `recovery`, `migrate`, `reshape`, and `expansion` remain
+visible but are not reported as failures. Unknown states remain unknown.
 
 ---
 
@@ -96,7 +106,20 @@ Existing system and disk unique IDs remain unchanged. Existing registered volume
 unique IDs and device identifiers are detected and retained. New volume entities
 are scoped with the NAS serial number and volume ID, preventing collisions when
 multiple NAS devices use the same local volume ID. Their registry IDs are not
-written to logs. This architecture-only phase adds no new OS 5 entities.
+written to logs.
+
+OS 5 monitoring uses the same session. Optional monitoring endpoints are
+isolated and rate-limited: diagnostics, warnings, and internet status are read
+at most every 10 minutes, while volume metadata is read at most hourly. A
+failure only makes the dependent entities unavailable and does not discard core
+system data. OS 2 entries never call these endpoints or create their entities.
+
+No process list is requested. Process count comes from `system_status()`. Raw
+RAID UUIDs, disk serials, device and mount paths, usernames, commands, cookies,
+and credentials are not exposed as entity attributes or written by the
+integration. `volume_status().percentage` is intentionally not treated as
+storage utilization, and its `free_size` is not mixed with values from another
+endpoint.
 
 Older releases loaded binary entities through the sensor platform. Home
 Assistant does not support changing an entity-registry domain atomically. For
@@ -112,7 +135,8 @@ to load without migration.
 
 Disk and volume topology is discovered when the config entry is loaded. A reload
 is currently required before newly attached disks or newly created volumes are
-registered. The legacy client exposes general HTTP failures without a structured
+registered. This also applies to newly appearing OS 5 RAID volumes and to an
+optional topology endpoint that was unavailable during initial setup. The legacy client exposes general HTTP failures without a structured
 status code, so authentication fallback handling still recognizes status 401/403
 from that exception text.
 
@@ -135,4 +159,7 @@ hass --skip-pip-packages wdnas-client -c C:\path\to\isolated-ha-config
 ```
 
 Confirm `wdnas_client.__file__` before testing. Do not use this workflow in a
-production Home Assistant installation.
+production Home Assistant installation. Phase 2 was developed and tested with
+the exact client commit
+`4e6389f753efdd942a1a919c065861bce18f9ca9`; export or check out that commit for
+the controlled live test.

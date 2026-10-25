@@ -47,17 +47,38 @@ async def test_coordinator_fetches_existing_data_for_os_versions(
 
     await _run_first_update(coordinator)
 
-    assert set(coordinator.data) == {
+    expected_keys = {
         "system_info",
         "system_status",
         "device_info",
         "system_version",
     }
+    if version == 5:
+        expected_keys.update(
+            {
+                "diagnostics",
+                "volume_status",
+                "system_warning",
+                "internet_access",
+                "optional_available",
+            }
+        )
+    assert set(coordinator.data) == expected_keys
     assert coordinator.update_interval.total_seconds() == 123
     client.system_info.assert_awaited_once()
     client.system_status.assert_awaited_once()
     client.device_info.assert_awaited_once()
     client.system_version.assert_awaited_once()
+    for method in (
+        client.diagnostics,
+        client.volume_status,
+        client.system_warning,
+        client.internet_access,
+    ):
+        if version == 5:
+            method.assert_awaited_once()
+        else:
+            method.assert_not_awaited()
     await coordinator.async_shutdown()
     assert client.session.closed
 

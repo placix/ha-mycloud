@@ -5,22 +5,105 @@ from __future__ import annotations
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
+    SensorEntityDescription,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfInformation, UnitOfTemperature
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .binary_sensor import legacy_sensor_entities
+from .const import VERSION
 from .coordinator import MyCloudDataUpdateCoordinator
 from .entity import (
     disk_device_info,
+    find_system_volume,
     main_device_info,
     resolve_volume_unique_id,
+    stable_raid_token,
     volume_device_info,
+)
+
+WARNING_OPTIONS = ["normal", "over_temperature", "system_busy_hotplug", "unknown"]
+WARNING_STATUS_BY_CODE = {
+    0: "normal",
+    1: "over_temperature",
+    2: "system_busy_hotplug",
+}
+RAID_STATE_OPTIONS = [
+    "clean",
+    "degraded",
+    "damaged",
+    "resync",
+    "resync5",
+    "recovery",
+    "migrate",
+    "reshape",
+    "expansion",
+    "unknown",
+]
+
+OS5_SYSTEM_DESCRIPTIONS = (
+    SensorEntityDescription(
+        key="process_count",
+        name="Process Count",
+        icon="mdi:application-cog-outline",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SensorEntityDescription(
+        key="memory_cached",
+        name="Memory Cached",
+        icon="mdi:memory",
+        device_class=SensorDeviceClass.DATA_SIZE,
+        native_unit_of_measurement=UnitOfInformation.KIBIBYTES,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SensorEntityDescription(
+        key="memory_buffers",
+        name="Memory Buffers",
+        icon="mdi:memory",
+        device_class=SensorDeviceClass.DATA_SIZE,
+        native_unit_of_measurement=UnitOfInformation.KIBIBYTES,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SensorEntityDescription(
+        key="system_warning",
+        name="System Warning",
+        icon="mdi:alert-circle-outline",
+        device_class=SensorDeviceClass.ENUM,
+        options=WARNING_OPTIONS,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+)
+
+RAID_DESCRIPTIONS = (
+    SensorEntityDescription(
+        key="state",
+        name="RAID State",
+        icon="mdi:harddisk-plus",
+        device_class=SensorDeviceClass.ENUM,
+        options=RAID_STATE_OPTIONS,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SensorEntityDescription(
+        key="mode",
+        name="RAID Mode",
+        icon="mdi:harddisk-plus",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+)
+
+FILESYSTEM_DESCRIPTION = SensorEntityDescription(
+    key="filesystem",
+    name="File System",
+    icon="mdi:file-tree-outline",
+    entity_category=EntityCategory.DIAGNOSTIC,
 )
 
 
@@ -79,8 +162,173 @@ async def async_setup_entry(
             )
         )
 
+    if config_entry.data[VERSION] == 5:
+        entities.extend(
+            MyCloudOS5SystemSensor(
+                coordinator, device, serial_number, device_name, description
+            )
+            for description in OS5_SYSTEM_DESCRIPTIONS
+        )
+
+        diagnostics = data.get("diagnostics") or {}
+        raid_volumes = diagnostics.get("raid", {}).get("volumes", [])
+        for index, raid_volume in enumerate(raid_volumes):
+            token = stable_raid_token(raid_volume, index)
+            system_volume = find_system_volume(
+                data, raid_volume.get("volume") or raid_volume.get("id")
+            )
+            raid_device = (
+                volume_device_info(hass, config_entry, data, system_volume)
+                if system_volume is not None
+                else device
+            )
+            for description in RAID_DESCRIPTIONS:
+                entities.append(
+                    MyCloudRAIDSensor(
+                        coordinator,
+                        raid_device,
+                        serial_number,
+                        device_name,
+                        token,
+                        description,
+                    )
+                )
+
+        for index, status in enumerate(data.get("volume_status") or []):
+            reference = status.get("volume") or index
+            system_volume = find_system_volume(data, reference)
+            status_device = (
+                volume_device_info(hass, config_entry, data, system_volume)
+                if system_volume is not None
+                else device
+            )
+            token = stable_raid_token({"id": reference}, index)
+            entities.append(
+                MyCloudFilesystemSensor(
+                    coordinator,
+                    status_device,
+                    serial_number,
+                    device_name,
+                    token,
+                )
+            )
+
     entities.extend(legacy_sensor_entities(hass, config_entry))
     async_add_entities(entities)
+
+
+class MyCloudOS5SystemSensor(
+    CoordinatorEntity[MyCloudDataUpdateCoordinator], SensorEntity
+):
+    """Expose safe OS 5 values from shared coordinator data."""
+
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator, device_info, serial, device_name, description):
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._attr_device_info = device_info
+        self._attr_unique_id = f"{serial}_{description.key}"
+        self._attr_name = description.name
+
+    @property
+    def available(self) -> bool:
+        """Require the warning endpoint only for its derived entity."""
+        if self.entity_description.key == "system_warning":
+            return super().available and self.coordinator.data.get(
+                "optional_available", {}
+            ).get("system_warning", False)
+        return super().available
+
+    @property
+    def native_value(self):
+        """Return one normalized OS 5 system value."""
+        key = self.entity_description.key
+        status = self.coordinator.data.get("system_status", {})
+        if key == "process_count":
+            return status.get("process_count")
+        if key == "memory_cached":
+            return status.get("memory", {}).get("cached")
+        if key == "memory_buffers":
+            return status.get("memory", {}).get("buffers")
+        warning = self.coordinator.data.get("system_warning") or {}
+        return WARNING_STATUS_BY_CODE.get(warning.get("code"), "unknown")
+
+
+class MyCloudRAIDSensor(CoordinatorEntity[MyCloudDataUpdateCoordinator], SensorEntity):
+    """Expose one safe field for one OS 5 RAID volume."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self, coordinator, device_info, serial, device_name, token, description
+    ):
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._attr_device_info = device_info
+        self._token = token
+        self._attr_unique_id = f"{serial}_raid_{token}_{description.key}"
+        self._attr_name = f"RAID {token} {description.name}"
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.coordinator.data.get(
+            "optional_available", {}
+        ).get("diagnostics", False)
+
+    def _volume(self) -> dict | None:
+        volumes = (
+            (self.coordinator.data.get("diagnostics") or {})
+            .get("raid", {})
+            .get("volumes", [])
+        )
+        for index, volume in enumerate(volumes):
+            if stable_raid_token(volume, index) == self._token:
+                return volume
+        return None
+
+    @property
+    def native_value(self):
+        volume = self._volume()
+        if volume is None:
+            return None
+        value = volume.get(self.entity_description.key)
+        if self.entity_description.key == "state":
+            normalized = str(value).lower() if value is not None else "unknown"
+            return normalized if normalized in RAID_STATE_OPTIONS else "unknown"
+        return value
+
+
+class MyCloudFilesystemSensor(
+    CoordinatorEntity[MyCloudDataUpdateCoordinator], SensorEntity
+):
+    """Expose the file-system type without leaking volume internals."""
+
+    _attr_has_entity_name = True
+    entity_description = FILESYSTEM_DESCRIPTION
+
+    def __init__(self, coordinator, device_info, serial, device_name, token):
+        super().__init__(coordinator)
+        self._attr_device_info = device_info
+        self._token = token
+        self._attr_unique_id = f"{serial}_volume_{token}_filesystem"
+        self._attr_name = "File System"
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.coordinator.data.get(
+            "optional_available", {}
+        ).get("volume_status", False)
+
+    @property
+    def native_value(self):
+        for index, volume in enumerate(
+            self.coordinator.data.get("volume_status") or []
+        ):
+            token = stable_raid_token({"id": volume.get("volume") or index}, index)
+            if token == self._token:
+                return volume.get("file_type")
+        return None
 
 
 class MyCloudSensorBase(CoordinatorEntity[MyCloudDataUpdateCoordinator], SensorEntity):
