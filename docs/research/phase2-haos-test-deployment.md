@@ -58,14 +58,15 @@ Nur die Paketkopie verwendet:
 
 ```json
 "requirements": [
-  "wdnas-client @ git+https://github.com/placix/wdnas_client.git@4e6389f753efdd942a1a919c065861bce18f9ca9"
+  "wdnas-client@git+https://github.com/placix/wdnas_client.git@4e6389f753efdd942a1a919c065861bce18f9ca9"
 ]
 ```
 
 Für das Pre-Release `v1.3.0-beta.1` verwendet nun auch das Release-Manifest die
 direkte Commit-Referenz. Die separate Paketkopie bleibt als vorab geprüftes
 Rollback-/Vergleichsartefakt erhalten. Die Referenz wurde mit
-`packaging.Requirement` geparst. Ein realer `pip wheel --no-deps`-Test hat den Fork geklont, den
+`packaging.Requirement` geparst. Hassfest verlangt die semantisch gleichwertige
+PEP-508-Form ohne Leerzeichen um `@`. Ein realer `pip wheel --no-deps`-Test hat den Fork geklont, den
 vollständigen Commit verifiziert und ein Wheel mit dem Distributionsnamen
 `wdnas_client-0.9.4-py3-none-any.whl` gebaut. URL und Paketname sind damit
 syntaktisch und für eine normale Python-/pip-Umgebung praktisch bestätigt.
