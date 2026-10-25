@@ -81,3 +81,58 @@ This integration provides the following entities. `[disk_name]` and `[volume_nam
 * **Volume Mounted**: `binary_sensor.wd_my_cloud_volume_[volume_name]_mounted`
 * **Volume Unlocked**: `binary_sensor.wd_my_cloud_volume_[volume_name]_unlocked`
 * **Volume Encrypted**: `binary_sensor.wd_my_cloud_volume_[volume_name]_encrypted`
+
+---
+
+## Architecture and compatibility
+
+Each config entry owns one authenticated `wdnas_client` session and one shared
+`DataUpdateCoordinator`. The coordinator supplies both the `sensor` and
+`binary_sensor` platforms, so entities do not issue independent NAS requests.
+The default 600-second polling interval and configurable minimum of 30 seconds
+remain unchanged.
+
+Existing system and disk unique IDs remain unchanged. Existing registered volume
+unique IDs and device identifiers are detected and retained. New volume entities
+are scoped with the NAS serial number and volume ID, preventing collisions when
+multiple NAS devices use the same local volume ID. Their registry IDs are not
+written to logs. This architecture-only phase adds no new OS 5 entities.
+
+Older releases loaded binary entities through the sensor platform. Home
+Assistant does not support changing an entity-registry domain atomically. For
+existing entries, the integration therefore continues serving those entities at
+their registered `sensor.*` IDs without deleting or recreating registry data.
+New installations register them correctly under `binary_sensor.*`. A future
+domain migration must be explicit and user-approved.
+
+Authentication is checked during new config flows. Connection, timeout,
+unsupported-version, duplicate-device, and reauthentication paths are handled
+separately. Existing config entries keep their original data keys and continue
+to load without migration.
+
+Disk and volume topology is discovered when the config entry is loaded. A reload
+is currently required before newly attached disks or newly created volumes are
+registered. The legacy client exposes general HTTP failures without a structured
+status code, so authentication fallback handling still recognizes status 401/403
+from that exception text.
+
+## Development and tests
+
+Tests are offline and use mocked NAS responses:
+
+```powershell
+python -m pip install -r requirements_test.txt
+python -m pytest
+```
+
+To test an unpublished `wdnas_client` checkout, use a separate Home Assistant
+venv or container. Install the client there in editable mode and prevent Home
+Assistant from replacing it with the public package:
+
+```powershell
+python -m pip install -e C:\Users\pLaCiX\Projects\wdnas_client
+hass --skip-pip-packages wdnas-client -c C:\path\to\isolated-ha-config
+```
+
+Confirm `wdnas_client.__file__` before testing. Do not use this workflow in a
+production Home Assistant installation.

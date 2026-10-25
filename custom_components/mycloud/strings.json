@@ -1,0 +1,45 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to WD My Cloud",
+        "description": "Enter the local NAS address and administrator credentials.",
+        "data": {
+          "Host": "IP address or hostname",
+          "Username": "Username",
+          "Password": "Password",
+          "Version": "NAS software version"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate WD My Cloud",
+        "description": "Enter updated administrator credentials.",
+        "data": {
+          "Username": "Username",
+          "Password": "Password"
+        }
+      }
+    },
+    "error": {
+      "auth": "The username or password is incorrect.",
+      "connection": "Unable to connect to the NAS.",
+      "unsupported_firmware": "The selected NAS software version is unsupported.",
+      "unknown": "An unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This NAS is already configured.",
+      "reauth_successful": "Reauthentication was successful.",
+      "unique_id_mismatch": "The credentials belong to a different NAS."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Polling options",
+        "data": {
+          "update_interval": "Update interval in seconds"
+        }
+      }
+    }
+  }
+}
