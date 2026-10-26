@@ -18,7 +18,7 @@ from custom_components.mycloud._vendor.wdnas_client.exceptions import (
     RequestFailedError,
 )
 from custom_components.mycloud.config_flow import _validate_host
-from custom_components.mycloud.const import DOMAIN
+from custom_components.mycloud.const import DOMAIN, RELEASE_ADMIN_SESSION
 from custom_components.mycloud.session import (
     _handoffs,
     async_discard_reauth_client,
@@ -372,7 +372,8 @@ async def test_successful_reauthentication_allows_following_setup(
     verifier.close.assert_not_awaited()
     coordinator_client.__aenter__.assert_awaited_once()
     await hass.config_entries.async_unload(entry.entry_id)
-    coordinator_client.__aexit__.assert_awaited_once()
+    coordinator_client.close.assert_awaited_once()
+    coordinator_client.__aexit__.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -599,6 +600,48 @@ async def test_all_config_flow_form_schemas_are_probatio_serializable(hass):
 
     options_form = await hass.config_entries.options.async_init(entry.entry_id)
     assert options_form["type"] is FlowResultType.FORM
-    assert to_field_list(
+    options_fields = to_field_list(
         options_form["data_schema"], custom_serializer=cv.custom_serializer
     )
+    release_session = next(
+        field for field in options_fields if field["name"] == RELEASE_ADMIN_SESSION
+    )
+    assert release_session["default"] is False
+    assert release_session["selector"] == {"boolean": {}}
+
+
+async def test_os5_release_session_option_can_be_enabled_and_preserved(hass):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=USER_INPUT,
+        options={"update_interval": 120},
+        unique_id="NAS-SERIAL-1",
+    )
+    entry.add_to_hass(hass)
+
+    form = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        form["flow_id"],
+        {"update_interval": 120, RELEASE_ADMIN_SESSION: True},
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"] == {
+        "update_interval": 120,
+        RELEASE_ADMIN_SESSION: True,
+    }
+
+
+@pytest.mark.parametrize("version", [2, 4])
+async def test_release_session_option_is_not_offered_outside_os5(hass, version):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={**USER_INPUT, "Version": version},
+        unique_id=f"NAS-{version}",
+    )
+    entry.add_to_hass(hass)
+
+    form = await hass.config_entries.options.async_init(entry.entry_id)
+    fields = to_field_list(form["data_schema"], custom_serializer=cv.custom_serializer)
+
+    assert RELEASE_ADMIN_SESSION not in {field["name"] for field in fields}

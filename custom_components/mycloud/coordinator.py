@@ -17,10 +17,12 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from ._vendor.wdnas_client import client as nas_client
 from ._vendor.wdnas_client.exceptions import InvalidLoginError, RequestFailedError
 from .const import (
+    DEFAULT_RELEASE_ADMIN_SESSION,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
     HOST,
     PASSWORD,
+    RELEASE_ADMIN_SESSION,
     UPDATE_TIMEOUT,
     USERNAME,
     VERSION,
@@ -80,6 +82,11 @@ class MyCloudDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._power_action_active = False
         self._session_ready = authenticated
         self._has_successful_update = False
+        self._release_admin_session = config_entry.data[
+            VERSION
+        ] == 5 and config_entry.options.get(
+            RELEASE_ADMIN_SESSION, DEFAULT_RELEASE_ADMIN_SESSION
+        )
         update_interval = config_entry.options.get(
             "update_interval", DEFAULT_UPDATE_INTERVAL
         )
@@ -93,9 +100,9 @@ class MyCloudDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_setup(self) -> None:
         """Open and authenticate the shared client session once."""
-        await self._async_login()
+        await self._async_login(transient_auth_failure=self._release_admin_session)
 
-    async def _async_login(self) -> None:
+    async def _async_login(self, *, transient_auth_failure: bool = False) -> None:
         """Authenticate, translating failures into Home Assistant semantics."""
         if self.config_entry.data[VERSION] == 5:
             try:
@@ -105,6 +112,10 @@ class MyCloudDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except Exception as error:
                 await self._async_close_client()
                 if _is_auth_error(error):
+                    if transient_auth_failure:
+                        raise UpdateFailed(
+                            "OS 5 administrator session is temporarily unavailable"
+                        ) from error
                     raise ConfigEntryAuthFailed("Invalid NAS credentials") from error
                 if isinstance(
                     error, (aiohttp.ClientError, TimeoutError, RequestFailedError)
@@ -240,20 +251,36 @@ class MyCloudDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         """Serialize polling with explicit device actions."""
         async with self._operation_lock:
-            return await self._async_update_data_locked()
+            if not self._release_admin_session:
+                return await self._async_update_data_locked()
+
+            try:
+                if not self._session_ready:
+                    await self._async_login(transient_auth_failure=True)
+                return await self._async_update_data_locked()
+            finally:
+                await self._async_close_client()
 
     async def _async_update_data_locked(self) -> dict[str, Any]:
         """Fetch data and retry once after an expired authenticated session."""
         if self.config_entry.data[VERSION] == 5:
             try:
-                return await self._async_fetch_data()
+                data = await self._async_fetch_data()
+                self._has_successful_update = True
+                return data
             except Exception as error:
                 if _is_auth_error(error):
+                    if self._release_admin_session:
+                        raise UpdateFailed(
+                            "OS 5 administrator session is temporarily unavailable"
+                        ) from error
                     _LOGGER.debug("NAS session expired; re-authenticating once")
                     try:
                         await self._async_close_client()
                         await self._async_login()
-                        return await self._async_fetch_data()
+                        data = await self._async_fetch_data()
+                        self._has_successful_update = True
+                        return data
                     except ConfigEntryAuthFailed:
                         raise
                     except Exception as retry_error:
@@ -318,7 +345,11 @@ class MyCloudDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "shutdown",
         ):
             raise PowerActionUnavailableError
-        if not self._session_ready or not self.last_update_success:
+        if (
+            not self.last_update_success
+            or not self._session_ready
+            and not self._release_admin_session
+        ):
             raise PowerActionUnavailableError
         if self._power_action_active:
             raise PowerActionInProgressError
@@ -326,26 +357,26 @@ class MyCloudDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._power_action_active = True
         try:
             async with self._operation_lock:
+                if not self._session_ready and self._release_admin_session:
+                    await self._async_login(transient_auth_failure=True)
                 if not self._session_ready:
                     raise PowerActionUnavailableError
-                await getattr(self.client, action)()
+                try:
+                    await getattr(self.client, action)()
+                finally:
+                    if self._release_admin_session:
+                        await self._async_close_client()
         finally:
             self._power_action_active = False
 
     async def async_shutdown(self) -> None:
         """Stop coordinator timers and close the shared client session."""
         await super().async_shutdown()
-        await self._async_close_client()
+        async with self._operation_lock:
+            await self._async_close_client()
 
     async def _async_close_client(self) -> bool:
         """Serialize logout and local session cleanup."""
-        if self.config_entry.data[VERSION] == 5:
-            self._session_ready = False
-            session = getattr(self.client, "session", None)
-            if session is not None and not getattr(session, "closed", False):
-                await self.client.__aexit__(None, None, None)
-            return True
-
         async with self._session_lock:
             return await self._async_close_client_unlocked()
 

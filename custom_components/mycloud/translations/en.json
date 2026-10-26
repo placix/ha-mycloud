@@ -41,7 +41,8 @@
       "init": {
         "title": "Polling options",
         "data": {
-          "update_interval": "Update interval in seconds"
+          "update_interval": "Update interval in seconds",
+          "release_admin_session_after_polling": "Release admin session after polling"
         }
       }
     }

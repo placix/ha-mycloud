@@ -1,5 +1,35 @@
 # WD OS 5 session management review
 
+## Combined test.8: ambiguous administrator-session recovery
+
+Hardware testing of combined test.7 showed that a Dashboard login can make the
+next Home Assistant OS 5 login unavailable. The captured firmware JavaScript
+contains no read-only preflight for administrator-session ownership, and no
+sanitized firmware response has established a distinct status or field for
+"account in use" versus "wrong password". String matching or invented status
+semantics would therefore be unreliable.
+
+The optional per-poll release mode now treats an ambiguous OS 5 authentication
+rejection as a transient update failure. It performs no immediate login retry
+and starts no reauthentication flow; the next scheduled coordinator update
+makes one new attempt. The default long-lived-session mode retains its existing
+authentication behavior.
+
+Combined test.8 was subsequently exercised on the Mirror Gen 2. After the
+Dashboard released its administrator session, Home Assistant recovered on a
+later scheduled poll without reauthentication. Config-entry disable also
+released the OS 5 administrator session successfully on this hardware.
+
+Cleanup also distinguishes an allocated HTTP client from proven server-session
+ownership. `DELETE /nas/v1/auth` is allowed only when the current login response
+issued a non-empty `PHPSESSID`, or when the same HTTP client subsequently parsed
+a protected OS 5 system/device response. Otherwise cleanup closes only local
+resources. This prevents a failed or ambiguous login from deliberately logging
+out a browser session. It cannot prevent the firmware itself from invalidating
+the browser as a side effect of `POST /nas/v1/auth`; no non-disruptive detection
+endpoint is known. Users needing uninterrupted Dashboard access should keep the
+optional per-poll mode disabled until that firmware behavior is better proven.
+
 ## PHPSESSID regression addendum
 
 The historically working client `4e6389f753ef` copied cookies from raw

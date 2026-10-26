@@ -144,6 +144,31 @@ dependent entities unavailable while device identity and confirmed capacity
 remain loaded. Server-side V4 cleanup uses the source-confirmed
 `GET /api/2.1/rest/logout` endpoint.
 
+Unloading, disabling, or removing an individual OS 5 config entry sends the
+WD JavaScript-confirmed `DELETE /nas/v1/auth` request through that entry's own
+session and then closes its local HTTP resources. Cleanup is serialized with
+polling and power actions and does not affect other configured NAS devices.
+Releasing the administrator session this way was successfully tested on a My
+Cloud Mirror Gen 2 running firmware 5.33.102.
+
+OS 5 entries also offer the optional **Release admin session after polling**
+setting. It is disabled by default. When enabled, one historical OS 5 login is
+used for the complete monitoring cycle, followed by the same server logout and
+local cleanup. The next cycle opens a new session. Power actions use the same
+per-device synchronization and are never retried; OS 2 and V4 are unaffected.
+
+The firmware does not expose a source-confirmed distinction between a wrong
+password and an occupied administrator session. In this optional mode an
+ambiguous OS 5 rejection is therefore temporary: entities become unavailable
+and the next scheduled poll tries once again without starting reauthentication.
+Automatic recovery after the Dashboard released its session was observed on
+the same Mirror Gen 2.
+Server logout is sent only after this client proves ownership through a newly
+issued session cookie or a successfully parsed protected response. This mode
+does not guarantee simultaneous Dashboard access: the login request itself may
+affect an existing browser session, and no safe preflight API is known. Whether
+a permanently active Dashboard session can coexist safely remains unverified.
+
 Legacy V4 login sends username and password as HTTP query parameters, matching
 the original interface. HTTP does not encrypt them. Use V4 only on a trusted
 local network, avoid HTTP request logging, and do not expose the NAS management

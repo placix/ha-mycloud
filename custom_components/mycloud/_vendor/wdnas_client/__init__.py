@@ -108,6 +108,7 @@ class client:
         self.phpsessid = None
         self.wd_csrf_token = None
         self._authenticated = False
+        self._server_session_owned = False
         self._lifecycle_lock = asyncio.Lock()
         self._logout_attempted = False
         self._logout_error = None
@@ -115,11 +116,17 @@ class client:
 
     async def __aenter__(self):
         # Protected historical OS 5 path from client commit 4e6389f.  In
-        # particular, keep aiohttp's default CookieJar and do not involve the
-        # newer lifecycle/logout manager used by V4.
+        # particular, keep aiohttp's default CookieJar and the historical
+        # login/cookie handling. The lifecycle flags only make final cleanup
+        # and the source-confirmed server-side logout idempotent.
         if self.version == 5:
+            self._authenticated = False
+            self._server_session_owned = False
+            self._logout_attempted = False
+            self._logout_error = None
             self.session = aiohttp.ClientSession()
             await self.login()
+            self._authenticated = True
             return self
 
         async with self._lifecycle_lock:
@@ -160,10 +167,6 @@ class client:
             return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self.version == 5:
-            await self.session.close()
-            return
-
         try:
             await self.close()
         except Exception:
@@ -171,14 +174,14 @@ class client:
                 raise
 
     async def logout(self) -> None:
-        """End an authenticated V4 session without opening a new one."""
-        if self.version != 4:
-            raise ValueError("Server-side logout is only enabled for API version 4")
+        """End an authenticated V4 or OS 5 session without opening a new one."""
+        if self.version not in (4, 5):
+            raise ValueError("Server-side logout is only enabled for API versions 4/5")
         async with self._lifecycle_lock:
             await self._logout_unlocked()
 
     async def _logout_unlocked(self) -> None:
-        """Perform at most one V4 server-side logout attempt."""
+        """Perform at most one supported server-side logout attempt."""
         if self._logout_attempted:
             if self._logout_error is not None:
                 raise self._logout_error
@@ -190,11 +193,22 @@ class client:
             return
         if not self._authenticated:
             return
+        if self.version == 5 and not self._server_session_owned:
+            return
 
         self._logout_attempted = True
-        url = f"{SCHEME}{self.host}{V4_ENDPOINTS['logout']}"
-        request = self.session.get
-        headers = {"Accept": "application/xml", "Host": self.host}
+        if self.version == 4:
+            url = f"{SCHEME}{self.host}{V4_ENDPOINTS['logout']}"
+            request = self.session.get
+            headers = {"Accept": "application/xml", "Host": self.host}
+        else:
+            url = f"{SCHEME}{self.host}{ENDPOINTS[5]['login']}"
+            request = self.session.delete
+            headers = {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Host": self.host,
+            }
         try:
             async with asyncio.timeout(SESSION_ACTION_TIMEOUT):
                 async with request(url, headers=headers) as response:
@@ -207,18 +221,14 @@ class client:
             self.phpsessid = None
             self.wd_csrf_token = None
             self._authenticated = False
+            self._server_session_owned = False
 
     async def close(self) -> None:
         """End the NAS session when supported, then close local HTTP resources."""
-        if self.version == 5:
-            if self.session is not None and not getattr(self.session, "closed", False):
-                await self.session.close()
-            return
-
         async with self._lifecycle_lock:
             logout_error = None
             try:
-                if self.version == 4:
+                if self.version in (4, 5):
                     await self._logout_unlocked()
             except BaseException as error:  # noqa: BLE001 - preserve cancellation
                 logout_error = error
@@ -230,6 +240,7 @@ class client:
                 self.phpsessid = None
                 self.wd_csrf_token = None
                 self._authenticated = False
+                self._server_session_owned = False
                 self._v4.reset()
 
             if logout_error is not None:
@@ -291,12 +302,21 @@ class client:
                 cookie = http.cookies.SimpleCookie(cookie_str)
                 for key, morsel in cookie.items():
                     self.session.cookie_jar.update_cookies({key: morsel.value})
+                    if key == "PHPSESSID" and morsel.value:
+                        self._server_session_owned = True
 
             cookies = response.cookies
             if "PHPSESSID" in cookies:
                 self.phpsessid = cookies["PHPSESSID"].value
+                if self.phpsessid:
+                    self._server_session_owned = True
         else:
             raise RequestFailedError(response.status)
+
+    def _confirm_os5_session_ownership(self) -> None:
+        """Record ownership after a protected OS 5 response was parsed."""
+        if self.version == 5 and self._authenticated:
+            self._server_session_owned = True
 
     async def _power_action(self, command: str) -> None:
         """Run a JavaScript-proven OS 5 power command after its safety check."""
@@ -489,6 +509,7 @@ class client:
                 device_info_json["size"]["unused"] = int(
                     device_info.find(".//total_unused_size").text
                 )
+                self._confirm_os5_session_ownership()
                 return device_info_json
             else:
                 raise RequestFailedError(response.status)
@@ -714,6 +735,7 @@ class client:
                 json_device_info["name"] = name_node.text
                 json_device_info["description"] = description_node.text
 
+                self._confirm_os5_session_ownership()
                 return json_device_info
             else:
                 raise RequestFailedError(response.status)

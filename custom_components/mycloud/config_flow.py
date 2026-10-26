@@ -12,6 +12,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
@@ -25,11 +26,13 @@ from ._vendor.wdnas_client import client as nas_client
 from ._vendor.wdnas_client.exceptions import InvalidLoginError, RequestFailedError
 from .const import (
     CONFIG_FLOW_TIMEOUT,
+    DEFAULT_RELEASE_ADMIN_SESSION,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
     HOST,
     MIN_UPDATE_INTERVAL,
     PASSWORD,
+    RELEASE_ADMIN_SESSION,
     USERNAME,
 )
 from .const import (
@@ -218,13 +221,19 @@ class MyCloudOptionsFlowHandler(config_entries.OptionsFlow):
         current_interval = self.config_entry.options.get(
             "update_interval", DEFAULT_UPDATE_INTERVAL
         )
-        options_schema = vol.Schema(
-            {
-                vol.Optional("update_interval", default=current_interval): vol.All(
-                    vol.Coerce(int), vol.Range(min=MIN_UPDATE_INTERVAL)
-                )
-            }
-        )
+        options = {
+            vol.Optional("update_interval", default=current_interval): vol.All(
+                vol.Coerce(int), vol.Range(min=MIN_UPDATE_INTERVAL)
+            )
+        }
+        if self.config_entry.data[API_VERSION] == 5:
+            release_session = self.config_entry.options.get(
+                RELEASE_ADMIN_SESSION, DEFAULT_RELEASE_ADMIN_SESSION
+            )
+            options[vol.Optional(RELEASE_ADMIN_SESSION, default=release_session)] = (
+                BooleanSelector()
+            )
+        options_schema = vol.Schema(options)
         return self.async_show_form(step_id="init", data_schema=options_schema)
 
 
