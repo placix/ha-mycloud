@@ -154,7 +154,7 @@ venv or container. Install the client there in editable mode and prevent Home
 Assistant from replacing it with the public package:
 
 ```powershell
-python -m pip install -e C:\Users\pLaCiX\Projects\wdnas_client
+python -m pip install -e .\wdnas_client
 hass --skip-pip-packages wdnas-client -c C:\path\to\isolated-ha-config
 ```
 
