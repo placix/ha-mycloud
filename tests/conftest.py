@@ -123,6 +123,59 @@ def nas_data():
 
 
 @pytest.fixture
+def v4_data():
+    """Return only measurements established for the legacy REST 2.1 API."""
+    return {
+        "system_info": {
+            "disks": [],
+            "volumes": [],
+            "size": {
+                "total": 1_964_257_656_832,
+                "used": 1_508_405_891_072,
+                "unused": 455_851_765_760,
+                "used_percentage": 1_508_405_891_072 * 100 / 1_964_257_656_832,
+            },
+            "capacity_label": "2TB",
+            "storage_usage": {
+                "size": 1_964_257_656_832,
+                "usage": 1_508_405_891_072,
+                "free": 455_851_765_760,
+                "used_percentage": 1_508_405_891_072 * 100 / 1_964_257_656_832,
+                "video": 429_798_163,
+                "photos": 5_219_116_702,
+                "music": 1_371_834_792,
+                "other": 1_501_385_141_415,
+            },
+            "storage_usage_available": True,
+        },
+        "system_status": {
+            "status": "ready",
+            "temperature": "good",
+            "smart": "good",
+            "volume": "good",
+            "free_space": "good",
+            "reported_status": "good",
+            "extra": {},
+        },
+        "device_info": {
+            "serial_number": "V4-NAS-SERIAL",
+            "name": "NAS02",
+            "description": "WD My Cloud",
+            "model_name": "WDMyCloud",
+            "model_number": "sq",
+            "manufacturer": "Western Digital Corporation",
+        },
+        "system_version": {
+            "firmware": "04.06.00-111",
+            "oled": None,
+            "name": "WDMyCloud",
+            "description": "Core F/W",
+        },
+        "internet_access": True,
+    }
+
+
+@pytest.fixture
 def make_nas_client(nas_data):
     """Build a fully asynchronous NAS client mock."""
 
@@ -131,6 +184,7 @@ def make_nas_client(nas_data):
         session = SimpleNamespace(closed=False)
         client = MagicMock()
         client.session = session
+        client.phpsessid = "session-id"
 
         async def _enter():
             session.closed = False
@@ -141,6 +195,7 @@ def make_nas_client(nas_data):
 
         client.__aenter__ = AsyncMock(side_effect=_enter)
         client.__aexit__ = AsyncMock(side_effect=_exit)
+        client.close = AsyncMock(side_effect=_exit)
         client.system_info = AsyncMock(return_value=values["system_info"])
         client.system_status = AsyncMock(return_value=values["system_status"])
         client.device_info = AsyncMock(return_value=values["device_info"])
@@ -149,6 +204,8 @@ def make_nas_client(nas_data):
         client.volume_status = AsyncMock(return_value=values.get("volume_status"))
         client.system_warning = AsyncMock(return_value=values.get("system_warning"))
         client.internet_access = AsyncMock(return_value=values.get("internet_access"))
+        client.reboot = AsyncMock()
+        client.shutdown = AsyncMock()
         return client
 
     return _make

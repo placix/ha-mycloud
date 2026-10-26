@@ -9,19 +9,25 @@ from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.mycloud.const import DOMAIN
+from custom_components.mycloud.sensor import STORAGE_USAGE_DESCRIPTION
 
 
-def _entry(unique_id="NAS-SERIAL-1"):
+def _entry(unique_id="NAS-SERIAL-1", version=5):
     return MockConfigEntry(
         domain=DOMAIN,
         data={
             "Host": "nas.local",
             "Username": "admin",
             "Password": "secret",
-            "Version": 5,
+            "Version": version,
         },
         unique_id=unique_id,
     )
+
+
+def test_storage_usage_suggests_one_decimal_without_rounding_source_value():
+    assert STORAGE_USAGE_DESCRIPTION.suggested_display_precision == 1
+    assert STORAGE_USAGE_DESCRIPTION.native_unit_of_measurement == "%"
 
 
 async def _setup(hass, entry, client):
@@ -98,6 +104,80 @@ async def test_existing_sensors_and_binary_sensors(hass, make_nas_client):
     } == expected_states
 
 
+async def test_v4_entities_only_expose_verified_capabilities(
+    hass, make_nas_client, v4_data
+):
+    entry = _entry("4:nas.local", version=4)
+    await _setup(hass, entry, make_nas_client(v4_data))
+
+    registry = er.async_get(hass)
+    entries = {
+        item.unique_id: item
+        for item in registry.entities.values()
+        if item.config_entry_id == entry.entry_id
+    }
+    expected = {
+        "V4-NAS-SERIAL_total_storage": "1.964257656832",
+        "V4-NAS-SERIAL_used_storage": "1.508405891072",
+        "V4-NAS-SERIAL_unused_storage": "0.45585176576",
+        "V4-NAS-SERIAL_storage_usage": "76.7926695271124",
+        "V4-NAS-SERIAL_v4_status": "ready",
+        "V4-NAS-SERIAL_v4_temperature": "good",
+        "V4-NAS-SERIAL_v4_smart_problem": "off",
+        "V4-NAS-SERIAL_v4_volume_problem": "off",
+        "V4-NAS-SERIAL_v4_free_space_problem": "off",
+        "V4-NAS-SERIAL_internet_access": "on",
+        "V4-NAS-SERIAL_restart": "unknown",
+        "V4-NAS-SERIAL_shutdown": "unknown",
+    }
+    assert set(entries) == set(expected)
+    assert {
+        unique_id: hass.states.get(entry_data.entity_id).state
+        for unique_id, entry_data in entries.items()
+    } == expected
+    assert "V4-NAS-SERIAL_cpu_usage" not in entries
+
+    device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, "V4-NAS-SERIAL"), entry.entry_id
+    )
+    assert device is not None
+    assert device.model == "WD My Cloud"
+    assert device.sw_version == "04.06.00-111"
+
+
+async def test_v4_storage_failure_preserves_existing_entities(
+    hass, make_nas_client, v4_data
+):
+    """Optional storage failure retains fallback total and established health."""
+    data = deepcopy(v4_data)
+    data["system_info"]["size"] = {
+        "total": 2_000_000_000_000,
+        "used": None,
+        "unused": None,
+        "used_percentage": None,
+    }
+    data["system_info"]["storage_usage"] = None
+    data["system_info"]["storage_usage_available"] = False
+    entry = _entry("4:nas.local", version=4)
+    await _setup(hass, entry, make_nas_client(data))
+
+    registry = er.async_get(hass)
+    entity_ids = {
+        item.unique_id: item.entity_id
+        for item in registry.entities.values()
+        if item.config_entry_id == entry.entry_id
+    }
+    assert hass.states.get(entity_ids["V4-NAS-SERIAL_total_storage"]).state == "2.0"
+    assert hass.states.get(entity_ids["V4-NAS-SERIAL_v4_status"]).state == "ready"
+    assert hass.states.get(entity_ids["V4-NAS-SERIAL_used_storage"]).state == "unknown"
+    assert (
+        hass.states.get(entity_ids["V4-NAS-SERIAL_unused_storage"]).state == "unknown"
+    )
+    assert hass.states.get(entity_ids["V4-NAS-SERIAL_storage_usage"]).state == (
+        "unavailable"
+    )
+
+
 async def test_owned_legacy_volume_ids_are_preserved(hass, make_nas_client):
     """An upgraded entry binds to every legacy volume ID without renaming it."""
     entry = _entry()
@@ -152,7 +232,7 @@ async def test_owned_legacy_volume_ids_are_preserved(hass, make_nas_client):
         (DOMAIN, "1"), entry.entry_id
     )
     assert volume_device is not None
-    assert entry.entry_id in volume_device.config_entries
+    assert volume_device.config_entry_id == entry.entry_id
 
 
 async def test_legacy_binary_entities_remain_non_destructive(hass, make_nas_client):

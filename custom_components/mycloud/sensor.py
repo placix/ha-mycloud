@@ -9,7 +9,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfInformation, UnitOfTemperature
+from homeassistant.const import PERCENTAGE, UnitOfInformation, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -106,6 +106,30 @@ FILESYSTEM_DESCRIPTION = SensorEntityDescription(
     entity_category=EntityCategory.DIAGNOSTIC,
 )
 
+V4_STATE_DESCRIPTIONS = (
+    SensorEntityDescription(
+        key="status",
+        name="System Status",
+        icon="mdi:nas",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SensorEntityDescription(
+        key="temperature",
+        name="Temperature Health",
+        icon="mdi:thermometer-check",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+)
+
+STORAGE_USAGE_DESCRIPTION = SensorEntityDescription(
+    key="storage_usage",
+    name="Storage Usage",
+    icon="mdi:percent",
+    native_unit_of_measurement=PERCENTAGE,
+    state_class=SensorStateClass.MEASUREMENT,
+    suggested_display_precision=1,
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -120,49 +144,75 @@ async def async_setup_entry(
     device_name = device_data["name"]
     device = main_device_info(data)
 
-    entities: list[SensorEntity] = [
-        MyCloudCPUSensor(coordinator, device, serial_number, device_name),
-        MyCloudMemorySensor(coordinator, device, serial_number, device_name),
-        MyCloudTotalStorageSensor(coordinator, device, serial_number, device_name),
-        MyCloudUsedStorageSensor(coordinator, device, serial_number, device_name),
-        MyCloudUnusedStorageSensor(coordinator, device, serial_number, device_name),
-    ]
-
-    for disk in data["system_info"]["disks"]:
-        disk_name = f"{device_name} Disk {disk['name']}"
-        disk_device = disk_device_info(hass, config_entry, data, disk)
+    version = config_entry.data[VERSION]
+    if version == 4:
+        entities: list[SensorEntity] = [
+            MyCloudV4StateSensor(coordinator, device, serial_number, description)
+            for description in V4_STATE_DESCRIPTIONS
+        ]
+        if data["system_info"].get("size", {}).get("total") is not None:
+            entities.append(
+                MyCloudTotalStorageSensor(
+                    coordinator, device, serial_number, device_name
+                )
+            )
         entities.extend(
             (
-                MyCloudDiskTempSensor(
-                    coordinator, disk_device, disk["sn"], disk_name, disk
+                MyCloudUsedStorageSensor(
+                    coordinator, device, serial_number, device_name
                 ),
-                MyCloudDiskSizeSensor(
-                    coordinator, disk_device, disk["sn"], disk_name, disk
+                MyCloudUnusedStorageSensor(
+                    coordinator, device, serial_number, device_name
+                ),
+                MyCloudStorageUsageSensor(
+                    coordinator, device, serial_number, device_name
                 ),
             )
         )
+    else:
+        entities = [
+            MyCloudCPUSensor(coordinator, device, serial_number, device_name),
+            MyCloudMemorySensor(coordinator, device, serial_number, device_name),
+            MyCloudTotalStorageSensor(coordinator, device, serial_number, device_name),
+            MyCloudUsedStorageSensor(coordinator, device, serial_number, device_name),
+            MyCloudUnusedStorageSensor(coordinator, device, serial_number, device_name),
+        ]
 
-    for volume in data["system_info"]["volumes"]:
-        volume_name = f"{device_name} {volume['label']}"
-        legacy_unique_id = f"{volume['id']}_volume_size"
-        unique_id = resolve_volume_unique_id(
-            hass,
-            config_entry,
-            "sensor",
-            legacy_unique_id,
-            f"{serial_number}_{legacy_unique_id}",
-        )
-        entities.append(
-            MyCloudVolumeSizeSensor(
-                coordinator,
-                volume_device_info(hass, config_entry, data, volume),
-                volume_name,
-                volume,
-                unique_id,
+        for disk in data["system_info"]["disks"]:
+            disk_name = f"{device_name} Disk {disk['name']}"
+            disk_device = disk_device_info(hass, config_entry, data, disk)
+            entities.extend(
+                (
+                    MyCloudDiskTempSensor(
+                        coordinator, disk_device, disk["sn"], disk_name, disk
+                    ),
+                    MyCloudDiskSizeSensor(
+                        coordinator, disk_device, disk["sn"], disk_name, disk
+                    ),
+                )
             )
-        )
 
-    if config_entry.data[VERSION] == 5:
+        for volume in data["system_info"]["volumes"]:
+            volume_name = f"{device_name} {volume['label']}"
+            legacy_unique_id = f"{volume['id']}_volume_size"
+            unique_id = resolve_volume_unique_id(
+                hass,
+                config_entry,
+                "sensor",
+                legacy_unique_id,
+                f"{serial_number}_{legacy_unique_id}",
+            )
+            entities.append(
+                MyCloudVolumeSizeSensor(
+                    coordinator,
+                    volume_device_info(hass, config_entry, data, volume),
+                    volume_name,
+                    volume,
+                    unique_id,
+                )
+            )
+
+    if version == 5:
         entities.extend(
             MyCloudOS5SystemSensor(
                 coordinator, device, serial_number, device_name, description
@@ -215,6 +265,33 @@ async def async_setup_entry(
 
     entities.extend(legacy_sensor_entities(hass, config_entry))
     async_add_entities(entities)
+
+
+class MyCloudV4StateSensor(
+    CoordinatorEntity[MyCloudDataUpdateCoordinator], SensorEntity
+):
+    """Expose one qualitative V4 state without converting it to a measurement."""
+
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator, device_info, serial, description):
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._attr_device_info = device_info
+        self._attr_unique_id = f"{serial}_v4_{description.key}"
+        self._attr_name = description.name
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.coordinator.data.get(
+            "optional_available", {}
+        ).get("system_status", False)
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("system_status", {}).get(
+            self.entity_description.key
+        )
 
 
 class MyCloudOS5SystemSensor(
@@ -426,7 +503,11 @@ class MyCloudStorageSensor(
     @property
     def native_value(self):
         """Return the existing storage value."""
-        return int(self.coordinator.data["system_info"]["size"][self._size_key])
+        value = self.coordinator.data["system_info"]["size"].get(self._size_key)
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
 
 
 class MyCloudTotalStorageSensor(MyCloudStorageSensor):
@@ -465,6 +546,36 @@ class MyCloudUnusedStorageSensor(MyCloudStorageSensor):
             "unused_storage",
             "Unused Storage",
             "mdi:database-plus",
+        )
+
+
+class MyCloudStorageUsageSensor(
+    CoordinatorEntity[MyCloudDataUpdateCoordinator], SensorEntity
+):
+    """Expose the V4 byte-derived storage utilization without rounding it."""
+
+    entity_description = STORAGE_USAGE_DESCRIPTION
+
+    def __init__(self, coordinator, device_info, serial_number, device_name) -> None:
+        super().__init__(coordinator)
+        self._attr_device_info = device_info
+        self._attr_unique_id = f"{serial_number}_storage_usage"
+        self._attr_name = f"{device_name} {self.entity_description.name}"
+
+    @property
+    def available(self) -> bool:
+        return super().available and bool(
+            self.coordinator.data.get("system_info", {}).get(
+                "storage_usage_available", False
+            )
+        )
+
+    @property
+    def native_value(self):
+        return (
+            self.coordinator.data.get("system_info", {})
+            .get("size", {})
+            .get("used_percentage")
         )
 
 

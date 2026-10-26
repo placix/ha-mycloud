@@ -7,8 +7,8 @@ from unittest.mock import patch
 import pytest
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from wdnas_client.exceptions import RequestFailedError
 
+from custom_components.mycloud._vendor.wdnas_client.exceptions import RequestFailedError
 from custom_components.mycloud.const import DOMAIN
 from custom_components.mycloud.coordinator import MyCloudDataUpdateCoordinator
 
@@ -68,8 +68,8 @@ async def test_os5_monitoring_entities_and_units(hass, make_nas_client):
         for item in er.async_get(hass).entities.values()
         if item.config_entry_id == entry.entry_id
     ]
-    assert len(entries) == 25
-    assert len({item.unique_id for item in entries}) == 25
+    assert len(entries) == 27
+    assert len({item.unique_id for item in entries}) == 27
 
     assert (
         _state_by_unique_id(hass, entry, "NAS-SERIAL-1_memory_cached").attributes[
@@ -152,18 +152,20 @@ async def test_optional_auth_failure_uses_central_reauthentication(
 ):
     """An auth failure from an optional endpoint follows the one-login retry path."""
     client = make_nas_client()
-    client.diagnostics.side_effect = [
-        RequestFailedError(403),
-        nas_data["diagnostics"],
-    ]
     entry = _entry()
     entry.add_to_hass(hass)
     coordinator = MyCloudDataUpdateCoordinator(hass, entry, client)
     await coordinator._async_setup()
+    await coordinator._async_update_data()
+    coordinator._optional_last_attempt.clear()
+    client.diagnostics.side_effect = [
+        RequestFailedError(403),
+        nas_data["diagnostics"],
+    ]
     data = await coordinator._async_update_data()
 
     assert client.__aenter__.await_count == 2
-    assert client.diagnostics.await_count == 2
+    assert client.diagnostics.await_count == 3
     assert data["optional_available"]["diagnostics"] is True
     await coordinator.async_shutdown()
 

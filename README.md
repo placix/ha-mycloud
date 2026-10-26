@@ -37,14 +37,20 @@ This integration is powered by the [wdnas-client](https://github.com/J-shw/wdnas
 1.  Go to **Settings** > **Devices & Services**.
 2.  Click **Add Integration** and search for "**WD My Cloud**".
 3.  Enter your device's **IP address** or **hostname** (e.g., `192.168.1.10` or `wdmycloud`). Do **not** include `http://` or `https://`.
-4.  Enter your username and password (Must be an **admin** account)
-5. Select NAS software version (Currently 2 or 5 are supported)
+4. Enter your username and password (must be an **admin** account). The password
+   field is masked.
+5. Select the matching API explicitly: **WD OS 5**, **WD My Cloud V4**, or
+   **WD OS 2**. The integration does not probe several authentication protocols.
+   Select V4 for an original WD My Cloud using the REST 2.1 XML API and firmware
+   `04.x`.
 
 ---
 
 ## Supported Devices & Contributing
 
-This integration currently supports V2 and V5 firmware. You can see a list of tested models in the client library's documentation:
+This integration supports V2 and V5 firmware plus V4 support for original WD
+My Cloud devices in the OS 3 family. The client documentation lists
+the precise validation level for each model:
 
 * **[View Known Supported Models](https://github.com/J-shw/wdnas_client/blob/dev/docs/SUPPORTED_MODELS.md)**
 
@@ -77,6 +83,12 @@ WD OS 5 additionally provides diagnostic sensors for process count, cached and
 buffered memory (reported by the NAS in KiB), system warning, RAID state and
 mode per RAID volume, and file-system type per storage volume.
 
+V4 exposes only values established by the REST 2.1 XML responses: system status,
+temperature health, total, used and free storage, storage usage, and internet
+connectivity. The qualitative value `good` is not presented as a Celsius
+temperature. CPU and memory entities are omitted because no corresponding
+measurements have been verified.
+
 ### Binary Sensors
 * **Disk Healthy**: `binary_sensor.wd_my_cloud_disk_[disk_name]_healthy`
 * **Disk Sleeping**: `binary_sensor.wd_my_cloud_disk_[disk_name]_sleeping`
@@ -92,13 +104,25 @@ volume. `degraded` and `damaged` are problems. Active maintenance states such as
 `resync`, `resync5`, `recovery`, `migrate`, `reshape`, and `expansion` remain
 visible but are not reported as failures. Unknown states remain unknown.
 
+V4 adds SMART, volume, and free-space problem binary sensors derived from the
+qualitative `system_state` fields. Missing state data makes these entities
+unavailable rather than assuming a healthy or failed condition.
+
+### Buttons
+
+WD OS 5 My Cloud Mirror and confirmed V4 model `sq` devices provide **Restart**
+and **Shutdown** buttons. They run only after an explicit press. OS 5 performs
+the dashboard safety check before sending the action; V4 uses its confirmed
+single-request power endpoint. Other OS 5/V4 models and all OS 2 devices do not
+receive these buttons until their commands are verified.
+
 ---
 
 ## Architecture and compatibility
 
 Each config entry owns one authenticated `wdnas_client` session and one shared
-`DataUpdateCoordinator`. The coordinator supplies both the `sensor` and
-`binary_sensor` platforms, so entities do not issue independent NAS requests.
+`DataUpdateCoordinator`. The coordinator supplies the `sensor`, `binary_sensor`,
+and `button` platforms, so entities do not issue independent NAS requests.
 The default 600-second polling interval and configurable minimum of 30 seconds
 remain unchanged.
 
@@ -114,6 +138,17 @@ at most every 10 minutes, while volume metadata is read at most hourly. A
 failure only makes the dependent entities unavailable and does not discard core
 system data. OS 2 entries never call these endpoints or create their entities.
 
+V4 uses one cookie-preserving session and performs the only initial-setup login
+in the coordinator. Firmware and system state are optional: failure leaves
+dependent entities unavailable while device identity and confirmed capacity
+remain loaded. Server-side V4 cleanup uses the source-confirmed
+`GET /api/2.1/rest/logout` endpoint.
+
+Legacy V4 login sends username and password as HTTP query parameters, matching
+the original interface. HTTP does not encrypt them. Use V4 only on a trusted
+local network, avoid HTTP request logging, and do not expose the NAS management
+interface outside that network.
+
 No process list is requested. Process count comes from `system_status()`. Raw
 RAID UUIDs, disk serials, device and mount paths, usernames, commands, cookies,
 and credentials are not exposed as entity attributes or written by the
@@ -128,10 +163,18 @@ their registered `sensor.*` IDs without deleting or recreating registry data.
 New installations register them correctly under `binary_sensor.*`. A future
 domain migration must be explicit and user-approved.
 
-Authentication is checked during new config flows. Connection, timeout,
-unsupported-version, duplicate-device, and reauthentication paths are handled
-separately. Existing config entries keep their original data keys and continue
-to load without migration.
+Initial configuration records the explicitly selected API version and defers the
+single login to the coordinator. Reauthentication verifies the stored protocol
+once and transfers that authenticated client directly to the reloaded
+coordinator. It does not log out merely to log in again. If the scheduled reload
+does not consume the handoff within 60 seconds, the temporary owner closes it.
+Connection, timeout, unsupported-version, duplicate-device, occupied-session,
+and reauthentication paths remain separate. Existing config entries retain
+their stored API version and continue to load without migration.
+
+Restart and shutdown reuse the coordinator session and never initiate a login.
+They are serialized with polling, concurrent button presses are rejected, and
+an uncertain timeout is not retried automatically.
 
 Disk and volume topology is discovered when the config entry is loaded. A reload
 is currently required before newly attached disks or newly created volumes are
@@ -159,7 +202,11 @@ hass --skip-pip-packages wdnas-client -c C:\path\to\isolated-ha-config
 ```
 
 Confirm `wdnas_client.__file__` before testing. Do not use this workflow in a
-production Home Assistant installation. Phase 2 was developed and tested with
-the exact client commit
-`4e6389f753efdd942a1a919c065861bce18f9ca9`; export or check out that commit for
-the controlled live test.
+production Home Assistant installation. This development branch vendors the
+reviewed client under `_vendor/wdnas_client` and keeps `requirements: []` so an
+older PyPI package cannot silently replace it.
+
+V4 login, monitoring, logout, and restart have been exercised on model `sq`
+with firmware `04.06.00-111`. OS 5 login, monitoring, and restart have been
+exercised on a My Cloud Mirror Gen 2 with firmware `5.33.102`. Shutdown is
+implemented for both devices but has not been executed on hardware.

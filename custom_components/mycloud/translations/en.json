@@ -22,8 +22,12 @@
     },
     "error": {
       "auth": "The username or password is incorrect.",
+      "auth_or_session": "The credentials were rejected or the administrator account already has an active session.",
       "connection": "Unable to connect to the NAS.",
-      "unsupported_firmware": "The selected NAS software version is unsupported.",
+      "invalid_host": "Enter a valid IP address or hostname without a URL or path.",
+      "logout_failed": "The verification session could not be safely released. Wait for the NAS session to expire before trying again.",
+      "timeout": "The NAS did not respond before the request timed out.",
+      "unsupported_firmware": "The NAS software or selected API version is unsupported.",
       "unknown": "An unexpected error occurred."
     },
     "abort": {
@@ -40,6 +44,12 @@
           "update_interval": "Update interval in seconds"
         }
       }
+    }
+  },
+  "entity": {
+    "button": {
+      "restart": {"name": "Restart"},
+      "shutdown": {"name": "Shutdown"}
     }
   }
 }

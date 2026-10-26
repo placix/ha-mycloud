@@ -94,7 +94,15 @@ def volume_device_info(
     else:
         existing = registry.async_get_device(identifiers={legacy_identifier})
 
-    if existing is not None and config_entry.entry_id in existing.config_entries:
+    existing_is_owned = False
+    if existing is not None:
+        if hasattr(existing, "config_entry_id"):
+            existing_is_owned = existing.config_entry_id == config_entry.entry_id
+        else:
+            # Compatibility with HA versions predating single device ownership.
+            existing_is_owned = config_entry.entry_id in existing.config_entries
+
+    if existing_is_owned:
         identifier = legacy_identifier
     else:
         identifier = (

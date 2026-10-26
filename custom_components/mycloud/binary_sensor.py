@@ -50,6 +50,29 @@ RAID_PROBLEM_DESCRIPTION = BinarySensorEntityDescription(
     device_class=BinarySensorDeviceClass.PROBLEM,
     entity_category=EntityCategory.DIAGNOSTIC,
 )
+V4_HEALTH_DESCRIPTIONS = (
+    BinarySensorEntityDescription(
+        key="smart",
+        name="SMART Problem",
+        icon="mdi:harddisk-alert",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    BinarySensorEntityDescription(
+        key="volume",
+        name="Volume Problem",
+        icon="mdi:database-alert",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    BinarySensorEntityDescription(
+        key="free_space",
+        name="Free Space Problem",
+        icon="mdi:database-alert",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+)
 
 RAID_OK_STATES = {
     "clean",
@@ -214,7 +237,58 @@ def _build_binary_entities(
                 )
             )
 
+    if not legacy_only and config_entry.data[VERSION] == 4:
+        main_device = main_device_info(data)
+        entities.extend(
+            MyCloudV4HealthBinarySensor(
+                coordinator,
+                main_device,
+                serial_number,
+                description,
+            )
+            for description in V4_HEALTH_DESCRIPTIONS
+        )
+        entities.append(
+            MyCloudOS5BinarySensor(
+                coordinator,
+                main_device,
+                serial_number,
+                device_name,
+                INTERNET_ACCESS_DESCRIPTION,
+            )
+        )
+
     return entities
+
+
+class MyCloudV4HealthBinarySensor(
+    CoordinatorEntity[MyCloudDataUpdateCoordinator], BinarySensorEntity
+):
+    """Expose one qualitative V4 health field as a problem indicator."""
+
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator, device_info, serial, description):
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._attr_device_info = device_info
+        self._attr_unique_id = f"{serial}_v4_{description.key}_problem"
+        self._attr_name = description.name
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.coordinator.data.get(
+            "optional_available", {}
+        ).get("system_status", False)
+
+    @property
+    def is_on(self):
+        value = self.coordinator.data.get("system_status", {}).get(
+            self.entity_description.key
+        )
+        if value is None:
+            return None
+        return str(value).strip().casefold() != "good"
 
 
 class MyCloudOS5BinarySensor(
