@@ -183,22 +183,24 @@ dass Home Assistant den lokalen Client beim Start durch PyPI ersetzt.
 Zuerst wird ein isolierter Build-Kontext erzeugt:
 
 ```powershell
-$testRoot = 'C:\Temp\ha-mycloud-phase1-docker'
+$testRoot = Join-Path $env:TEMP 'ha-mycloud-phase1-docker'
+$clientCheckout = '<wdnas-client-checkout>'
+$integrationCheckout = '<ha-mycloud-checkout>'
 New-Item -ItemType Directory -Force `
   "$testRoot\wdnas_client", `
   "$testRoot\config\custom_components" | Out-Null
 
-git -C C:\Users\pLaCiX\Projects\wdnas_client `
+git -C $clientCheckout `
   archive 4e6389f753efdd942a1a919c065861bce18f9ca9 `
   -o "$testRoot\wdnas_client.tar"
 tar -xf "$testRoot\wdnas_client.tar" -C "$testRoot\wdnas_client"
 
 Copy-Item -Recurse `
-  C:\Users\pLaCiX\Projects\ha-mycloud\custom_components\mycloud `
+  "$integrationCheckout\custom_components\mycloud" `
   "$testRoot\config\custom_components\mycloud"
 ```
 
-`C:\Temp\ha-mycloud-phase1-docker\Dockerfile`:
+`Dockerfile` in the isolated test root:
 
 ```dockerfile
 FROM ghcr.io/home-assistant/home-assistant:stable

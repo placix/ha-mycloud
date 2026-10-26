@@ -24,10 +24,10 @@ bekannt sein. Ohne diese Angaben bleibt die Installation gesperrt.
 
 ## 2. Vorbereitetes Testpaket
 
-Lokaler Pfad:
+Paketlayout:
 
 ```text
-C:\Users\pLaCiX\Projects\ha-mycloud\haos-test-package\
+haos-test-package\
   .gitignore
   custom_components\
     mycloud\

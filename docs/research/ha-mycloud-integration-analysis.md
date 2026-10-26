@@ -15,8 +15,8 @@ Diese Analyse basiert auf folgenden unveränderten Ständen:
 - Zielgerät: WD My Cloud Mirror Gen 2, Firmware 5.33.102, RAID 1, zwei
   Festplatten, ext4 und OS-5-Authentifizierung
 
-Das lokale Integrationsrepository wurde nach
-`C:\Users\pLaCiX\Projects\ha-mycloud` geklont. `origin` zeigt auf den Fork,
+Das Integrationsrepository wurde in einen lokalen Checkout geklont. `origin`
+zeigt auf den Fork,
 `upstream` auf `J-shw/ha-mycloud`. Der Arbeitsbaum war vor Erstellung dieses
 Berichts sauber. Es wurden keine Integrationsdateien, Versionen, produktiven
 Home-Assistant-Installationen oder Remotes verändert.
@@ -220,10 +220,10 @@ Entwicklungsumgebung, nicht die produktive Installation:
 Beispielprinzip:
 
 ```powershell
-git -C C:\Users\pLaCiX\Projects\wdnas_client rev-parse HEAD
-python -m pip install -e C:\Users\pLaCiX\Projects\wdnas_client
+git -C <wdnas-client-checkout> rev-parse HEAD
+python -m pip install -e <wdnas-client-checkout>
 python -c "import wdnas_client; print(wdnas_client.__file__)"
-hass --skip-pip-packages wdnas-client -c C:\Pfad\zu\isolierter-ha-config
+hass --skip-pip-packages wdnas-client -c <isolated-ha-config>
 ```
 
 Die verwendete `python`- und `hass`-Executable müssen aus derselben isolierten

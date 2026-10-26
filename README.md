@@ -198,7 +198,7 @@ Assistant from replacing it with the public package:
 
 ```powershell
 python -m pip install -e .\wdnas_client
-hass --skip-pip-packages wdnas-client -c C:\path\to\isolated-ha-config
+hass --skip-pip-packages wdnas-client -c <isolated-ha-config>
 ```
 
 Confirm `wdnas_client.__file__` before testing. Do not use this workflow in a
